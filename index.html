@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SMT Component Mapper</title>
+    <title>SMT Barcode Mapper</title>
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root {
@@ -12,7 +12,6 @@
             --text-color: #e0e0e0;
             --accent-color: #00adb5;
             --confirm-color: #393e46;
-            --alert-color: #ffb703;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -24,15 +23,32 @@
             flex-direction: column;
             align-items: center;
         }
-        h1, h2 { margin: 10px 0; text-align: center; }
+        h1, h2 { margin: 10px 0; text-align: center; font-size: 1.6rem; }
         .container { width: 100%; max-width: 500px; }
         
-        #reader {
+        /* Kontajner pre skener s červenou zameriavacou linkou */
+        .scanner-wrapper {
+            position: relative;
             width: 100%;
-            background: #000;
             border-radius: 8px;
             overflow: hidden;
             border: 2px solid var(--accent-color);
+            background: #000;
+        }
+        #reader {
+            width: 100%;
+        }
+        /* Červená linka v strede pre ľahšie zameranie čiarového kódu */
+        .laser-line {
+            position: absolute;
+            top: 50%;
+            left: 5%;
+            width: 90%;
+            height: 2px;
+            background-color: #ff4136;
+            box-shadow: 0 0 8px #ff4136;
+            z-index: 10;
+            pointer-events: none;
         }
         
         .card {
@@ -49,9 +65,11 @@
             padding: 10px;
             border-radius: 4px;
             margin-bottom: 15px;
+            font-size: 1.1rem;
+            text-align: center;
+            color: #fff;
         }
         
-        /* Veľké info o nájdenom komponente */
         .found-info {
             background-color: #2a3a3a;
             border-left: 5px solid var(--accent-color);
@@ -87,7 +105,6 @@
             background-color: var(--accent-color);
         }
         
-        /* Sekcia pre zadanie pozície */
         .position-input-zone {
             display: flex;
             gap: 10px;
@@ -119,7 +136,7 @@
         
         .history-list {
             margin-top: 20px;
-            max-height: 250px;
+            max-height: 220px;
             overflow-y: auto;
         }
         .history-item {
@@ -136,7 +153,6 @@
             font-weight: bold;
             padding: 2px 8px;
             border-radius: 4px;
-            font-size: 0.85rem;
         }
         .btn-clear {
             background: #ff4136;
@@ -153,12 +169,15 @@
 <body>
 
 <div class="container">
-    <h1>SMT QR Mapper</h1>
+    <h1>SMT Barcode Mapper</h1>
     
-    <div id="reader"></div>
+    <div class="scanner-wrapper">
+        <div id="reader"></div>
+        <div class="laser-line"></div>
+    </div>
     
     <div class="card" id="action-card" style="display: none;">
-        <h3>Naskenovaný kód:</h3>
+        <h3>Naskenovaný diel:</h3>
         <div class="scanned-text" id="result-text">---</div>
         
         <div id="search-result" style="display: none;"></div>
@@ -169,16 +188,16 @@
         </div>
         
         <div id="step-position" style="display: none;">
-            <h3>Zadaj pozíciu (feeder) pre Stroj <span id="selected-machine-label" style="color:var(--accent-color)">-</span>:</h3>
+            <h3>Zadaj pozíciu pre Stroj <span id="selected-machine-label" style="color:var(--accent-color)">-</span>:</h3>
             <div class="position-input-zone">
-                <input type="number" id="input-position" class="input-pos" placeholder="Číslo pozície (napr. 42)" inputmode="numeric" pattern="[0-9]*">
+                <input type="number" id="input-position" class="input-pos" placeholder="Číslo pozície" inputmode="numeric" pattern="[0-9]*">
                 <button class="btn-save-pos" onclick="saveFinalMapping()">Uložiť</button>
             </div>
         </div>
     </div>
     
     <div class="card">
-        <h2>Priradené komponenty (<span id="count">0</span>)</h2>
+        <h2>Uložené komponenty (<span id="count">0</span>)</h2>
         <div class="history-list" id="history-data"></div>
         <button class="btn-clear" onclick="clearAllData()">Vymazať celú referenciu</button>
     </div>
@@ -188,22 +207,30 @@
     let html5QrcodeScanner;
     let lastScannedCode = "";
     let temporaryMachine = null;
-    let database = JSON.parse(localStorage.getItem('smt_mapping_v2')) || {};
+    let database = JSON.parse(localStorage.getItem('smt_barcode_mapping')) || {};
 
     function init() {
         renderHistory();
         renderButtons();
         
+        // Zmena konfigurácie: pridali sme podporu pre klasické čiarové kódy (Code 128, Code 39, atď.)
+        // Upravili sme qrbox na obdĺžnik (šírka 280, výška 120), aby lepšie sedel na čiarový kód
         html5QrcodeScanner = new Html5QrcodeScanner("reader", { 
-            fps: 10, 
-            qrbox: { width: 250, height: 250 },
+            fps: 15, 
+            qrbox: { width: 280, height: 120 },
             rememberLastUsedCamera: true,
+            formatsToSupport: [ 
+                Html5QrcodeSupportedFormats.QR_CODE,
+                Html5QrcodeSupportedFormats.CODE_128,
+                Html5QrcodeSupportedFormats.CODE_39,
+                Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.EAN_13
+            ],
             supportedScanTypes: [Html5QrcodeScanType.SCAN_TYPE_CAMERA]
         });
         
         html5QrcodeScanner.render(onScanSuccess);
         
-        // Umožní uložiť pozíciu stlačením Enteru na klávesnici mobilu
         document.getElementById("input-position").addEventListener("keypress", function(event) {
             if (event.key === "Enter") {
                 event.preventDefault();
@@ -213,6 +240,11 @@
     }
 
     function onScanSuccess(decodedText) {
+        // Ignorujeme okamžité duplicitné načítanie rovnakého kódu počas zobrazeného výsledku
+        if (decodedText === lastScannedCode && document.getElementById("action-card").style.display === "block") {
+            return;
+        }
+
         lastScannedCode = decodedText;
         document.getElementById("result-text").innerText = decodedText;
         document.getElementById("action-card").style.display = "block";
@@ -220,7 +252,6 @@
         const searchResultDiv = document.getElementById("search-result");
         
         if (database[decodedText]) {
-            // Komponent sa našiel - ukážeme veľké info
             searchResultDiv.style.display = "block";
             searchResultDiv.innerHTML = `
                 <div class="found-info">
@@ -230,12 +261,10 @@
             `;
             document.getElementById("assignment-title").innerText = "Chceš zmeniť priradenie? Vyber stroj:";
         } else {
-            // Komponent je nový
             searchResultDiv.style.display = "none";
             document.getElementById("assignment-title").innerText = "Priradiť k Fuji stroju (1-9):";
         }
         
-        // Resetujeme kroky do pôvodného stavu
         document.getElementById("step-machine").style.display = "block";
         document.getElementById("step-position").style.display = "none";
         document.getElementById("input-position").value = "";
@@ -255,22 +284,17 @@
         }
     }
 
-    // Krok 1: Používateľ vybral stroj, ideme na pozíciu
     function selectMachine(machineNum) {
         temporaryMachine = machineNum;
         document.getElementById("selected-machine-label").innerText = machineNum;
-        
-        // Prepnutie zobrazenia na zadanie pozície
         document.getElementById("step-machine").style.display = "none";
         document.getElementById("step-position").style.display = "block";
         
-        // Automaticky aktivuje políčko a vysunie klávesnicu
         setTimeout(() => {
             document.getElementById("input-position").focus();
         }, 50);
     }
 
-    // Krok 2: Uloženie kompletnej dvojice (Stroj + Pozícia)
     function saveFinalMapping() {
         const posValue = document.getElementById("input-position").value.trim();
         if (!lastScannedCode || !temporaryMachine || !posValue) return;
@@ -280,10 +304,9 @@
             position: posValue
         };
         
-        localStorage.setItem('smt_mapping_v2', JSON.stringify(database));
+        localStorage.setItem('smt_barcode_mapping', JSON.stringify(database));
         renderHistory();
         
-        // Skryť kartu a vyčistiť stav pre ďalší sken
         document.getElementById("action-card").style.display = "none";
         lastScannedCode = "";
         temporaryMachine = null;
@@ -297,7 +320,7 @@
         document.getElementById("count").innerText = keys.length;
         
         if (keys.length === 0) {
-            listContainer.innerHTML = '<div style="text-align:center; color:#777; padding: 10px;">Zatiaľ žiadne priradené komponenty.</div>';
+            listContainer.innerHTML = '<div style="text-align:center; color:#777; padding: 10px;">Žiadne priradené komponenty.</div>';
             return;
         }
         
@@ -305,7 +328,7 @@
             const item = document.createElement("div");
             item.className = "history-item";
             
-            const shortCode = code.length > 20 ? code.substring(0, 17) + "..." : code;
+            const shortCode = code.length > 22 ? code.substring(0, 19) + "..." : code;
             
             item.innerHTML = `
                 <span title="${code}">${shortCode}</span>
@@ -318,7 +341,7 @@
     function clearAllData() {
         if (confirm("Naozaj vymazať celú túto referenciu?")) {
             database = {};
-            localStorage.removeItem('smt_mapping_v2');
+            localStorage.removeItem('smt_barcode_mapping');
             renderHistory();
             document.getElementById("action-card").style.display = "none";
         }
