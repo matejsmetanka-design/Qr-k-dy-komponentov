@@ -1,0 +1,1 @@
+# Qr-k-dy-komponentov
