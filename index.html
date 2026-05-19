@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SMT Component Mapper</title>
-    <!-- Načítanie knižnice pre skenovanie QR kódov -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         :root {
@@ -13,6 +12,7 @@
             --text-color: #e0e0e0;
             --accent-color: #00adb5;
             --confirm-color: #393e46;
+            --alert-color: #ffb703;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -27,7 +27,6 @@
         h1, h2 { margin: 10px 0; text-align: center; }
         .container { width: 100%; max-width: 500px; }
         
-        /* Sekcia skenera */
         #reader {
             width: 100%;
             background: #000;
@@ -36,7 +35,6 @@
             border: 2px solid var(--accent-color);
         }
         
-        /* Výsledky a interakcia */
         .card {
             background-color: var(--card-bg);
             padding: 15px;
@@ -53,7 +51,22 @@
             margin-bottom: 15px;
         }
         
-        /* Mriežka tlačidiel pre stroje 1-9 */
+        /* Veľké info o nájdenom komponente */
+        .found-info {
+            background-color: #2a3a3a;
+            border-left: 5px solid var(--accent-color);
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .found-location {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #fff;
+            margin-top: 5px;
+        }
+        
         .machine-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -64,18 +77,46 @@
             background-color: var(--confirm-color);
             color: white;
             border: 2px solid #4f5b66;
-            padding: 20px 0;
-            font-size: 1.5rem;
+            padding: 18px 0;
+            font-size: 1.4rem;
             font-weight: bold;
             border-radius: 6px;
             cursor: pointer;
-            transition: background 0.2s;
         }
         .btn-machine:active {
             background-color: var(--accent-color);
         }
         
-        /* Zoznam uložených dát */
+        /* Sekcia pre zadanie pozície */
+        .position-input-zone {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .input-pos {
+            flex: 1;
+            background: #2d2d2d;
+            border: 2px solid #4f5b66;
+            color: white;
+            padding: 12px;
+            font-size: 1.2rem;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .input-pos:focus {
+            border-color: var(--accent-color);
+            outline: none;
+        }
+        .btn-save-pos {
+            background-color: var(--accent-color);
+            color: black;
+            border: none;
+            padding: 0 20px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 6px;
+        }
+        
         .history-list {
             margin-top: 20px;
             max-height: 250px;
@@ -95,6 +136,7 @@
             font-weight: bold;
             padding: 2px 8px;
             border-radius: 4px;
+            font-size: 0.85rem;
         }
         .btn-clear {
             background: #ff4136;
@@ -113,26 +155,31 @@
 <div class="container">
     <h1>SMT QR Mapper</h1>
     
-    <!-- Okno kamery -->
     <div id="reader"></div>
     
-    <!-- Diagnostika / Aktuálny stav -->
     <div class="card" id="action-card" style="display: none;">
-        <h3>Naskenovaný komponent:</h3>
+        <h3>Naskenovaný kód:</h3>
         <div class="scanned-text" id="result-text">---</div>
         
-        <h3 id="assignment-title">Priradiť k Fuji stroju (1-9):</h3>
-        <div class="machine-grid" id="machine-buttons">
-            <!-- Tlačidlá 1 až 9 vygeneruje JavaScript -->
+        <div id="search-result" style="display: none;"></div>
+        
+        <div id="step-machine">
+            <h3 id="assignment-title">Priradiť k Fuji stroju (1-9):</h3>
+            <div class="machine-grid" id="machine-buttons"></div>
+        </div>
+        
+        <div id="step-position" style="display: none;">
+            <h3>Zadaj pozíciu (feeder) pre Stroj <span id="selected-machine-label" style="color:var(--accent-color)">-</span>:</h3>
+            <div class="position-input-zone">
+                <input type="number" id="input-position" class="input-pos" placeholder="Číslo pozície (napr. 42)" inputmode="numeric" pattern="[0-9]*">
+                <button class="btn-save-pos" onclick="saveFinalMapping()">Uložiť</button>
+            </div>
         </div>
     </div>
     
-    <!-- Prehľad už priradených komponentov -->
     <div class="card">
-        <h2>Priradené komponenty (<span id="count">0</span>/50)</h2>
-        <div class="history-list" id="history-data">
-            <!-- Sem sa budú sypať priradené veci -->
-        </div>
+        <h2>Priradené komponenty (<span id="count">0</span>)</h2>
+        <div class="history-list" id="history-data"></div>
         <button class="btn-clear" onclick="clearAllData()">Vymazať celú referenciu</button>
     </div>
 </div>
@@ -140,14 +187,13 @@
 <script>
     let html5QrcodeScanner;
     let lastScannedCode = "";
-    // Načítanie už uložených dát z pamäte mobilu
-    let database = JSON.parse(localStorage.getItem('smt_mapping')) || {};
+    let temporaryMachine = null;
+    let database = JSON.parse(localStorage.getItem('smt_mapping_v2')) || {};
 
     function init() {
         renderHistory();
         renderButtons();
         
-        // Nastavenie skenera. qrbox určuje veľkosť zameriavacieho štvorca
         html5QrcodeScanner = new Html5QrcodeScanner("reader", { 
             fps: 10, 
             qrbox: { width: 250, height: 250 },
@@ -156,26 +202,47 @@
         });
         
         html5QrcodeScanner.render(onScanSuccess);
+        
+        // Umožní uložiť pozíciu stlačením Enteru na klávesnici mobilu
+        document.getElementById("input-position").addEventListener("keypress", function(event) {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                saveFinalMapping();
+            }
+        });
     }
 
-    // Spustí sa, keď kamera úspešne prečíta QR kód
     function onScanSuccess(decodedText) {
         lastScannedCode = decodedText;
         document.getElementById("result-text").innerText = decodedText;
         document.getElementById("action-card").style.display = "block";
         
-        // Ak už tento komponent v databáze máme, zvýrazníme informáciu
+        const searchResultDiv = document.getElementById("search-result");
+        
         if (database[decodedText]) {
-            document.getElementById("assignment-title").innerHTML = `⚠️ Už priradené k stroju <span style="color:#00adb5">${database[decodedText]}</span>. Zmeniť na:`;
+            // Komponent sa našiel - ukážeme veľké info
+            searchResultDiv.style.display = "block";
+            searchResultDiv.innerHTML = `
+                <div class="found-info">
+                    Umiestnenie komponentu:
+                    <div class="found-location">Stroj ${database[decodedText].machine} | Pozícia ${database[decodedText].position}</div>
+                </div>
+            `;
+            document.getElementById("assignment-title").innerText = "Chceš zmeniť priradenie? Vyber stroj:";
         } else {
+            // Komponent je nový
+            searchResultDiv.style.display = "none";
             document.getElementById("assignment-title").innerText = "Priradiť k Fuji stroju (1-9):";
         }
         
-        // Krátke pípnutie/zavibrovanie (ak telefón podporuje)
+        // Resetujeme kroky do pôvodného stavu
+        document.getElementById("step-machine").style.display = "block";
+        document.getElementById("step-position").style.display = "none";
+        document.getElementById("input-position").value = "";
+        
         if (navigator.vibrate) navigator.vibrate(100);
     }
 
-    // Vygenerovanie tlačidiel 1 až 9
     function renderButtons() {
         const grid = document.getElementById("machine-buttons");
         grid.innerHTML = "";
@@ -183,27 +250,45 @@
             const btn = document.createElement("button");
             btn.className = "btn-machine";
             btn.innerText = i;
-            btn.onclick = () => assignMachine(i);
+            btn.onclick = () => selectMachine(i);
             grid.appendChild(btn);
         }
     }
 
-    // Priradenie stroja ku kódu a zápis do LocalStorage
-    function assignMachine(machineNum) {
-        if (!lastScannedCode) return;
+    // Krok 1: Používateľ vybral stroj, ideme na pozíciu
+    function selectMachine(machineNum) {
+        temporaryMachine = machineNum;
+        document.getElementById("selected-machine-label").innerText = machineNum;
         
-        database[lastScannedCode] = machineNum;
-        localStorage.setItem('smt_mapping', JSON.stringify(database));
+        // Prepnutie zobrazenia na zadanie pozície
+        document.getElementById("step-machine").style.display = "none";
+        document.getElementById("step-position").style.display = "block";
         
-        renderHistory();
-        
-        // Skryjeme kartu akcie a pripravíme skener na ďalší kus
-        document.getElementById("action-card").style.display = "none";
-        lastScannedCode = "";
-        document.getElementById("result-text").innerText = "---";
+        // Automaticky aktivuje políčko a vysunie klávesnicu
+        setTimeout(() => {
+            document.getElementById("input-position").focus();
+        }, 50);
     }
 
-    // Vykreslenie zoznamu priradených komponentov
+    // Krok 2: Uloženie kompletnej dvojice (Stroj + Pozícia)
+    function saveFinalMapping() {
+        const posValue = document.getElementById("input-position").value.trim();
+        if (!lastScannedCode || !temporaryMachine || !posValue) return;
+        
+        database[lastScannedCode] = {
+            machine: temporaryMachine,
+            position: posValue
+        };
+        
+        localStorage.setItem('smt_mapping_v2', JSON.stringify(database));
+        renderHistory();
+        
+        // Skryť kartu a vyčistiť stav pre ďalší sken
+        document.getElementById("action-card").style.display = "none";
+        lastScannedCode = "";
+        temporaryMachine = null;
+    }
+
     function renderHistory() {
         const listContainer = document.getElementById("history-data");
         listContainer.innerHTML = "";
@@ -216,33 +301,29 @@
             return;
         }
         
-        // Zobrazujeme od najnovšie priradených
         keys.reverse().forEach(code => {
             const item = document.createElement("div");
             item.className = "history-item";
             
-            // Skrátenie pridlhého textu z QR kódu kvôli dizajnu na mobile
-            const shortCode = code.length > 25 ? code.substring(0, 22) + "..." : code;
+            const shortCode = code.length > 20 ? code.substring(0, 17) + "..." : code;
             
             item.innerHTML = `
                 <span title="${code}">${shortCode}</span>
-                <span class="machine-badge">Stroj ${database[code]}</span>
+                <span class="machine-badge">Stroj ${database[code].machine} (Poz. ${database[code].position})</span>
             `;
             listContainer.appendChild(item);
         });
     }
 
-    // Reset celej referencie
     function clearAllData() {
-        if (confirm("Naozaj vymazať všetky napárované komponenty pre túto referenciu?")) {
+        if (confirm("Naozaj vymazať celú túto referenciu?")) {
             database = {};
-            localStorage.removeItem('smt_mapping');
+            localStorage.removeItem('smt_mapping_v2');
             renderHistory();
             document.getElementById("action-card").style.display = "none";
         }
     }
 
-    // Spustenie pri načítaní stránky
     window.onload = init;
 </script>
 
